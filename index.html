@@ -8,7 +8,7 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- FontAwesome Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <!-- Google Fonts Inter & Noto Sans TC -->
+    <!-- Google Fonts Noto Sans TC -->
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
     <style>
         body {
@@ -21,16 +21,31 @@
         .text-elderly-lg { font-size: 1.5rem; line-height: 1.7; }     /* 24px */
         .text-elderly-xl { font-size: 1.875rem; line-height: 1.6; }   /* 30px */
         
-        .big-touch-target {
-            min-height: 52px;
-        }
-        
         .custom-shadow {
             box-shadow: 0 4px 20px rgba(180, 100, 50, 0.08);
         }
     </style>
 </head>
 <body class="min-h-screen pb-16">
+
+    <!-- 
+    =============================================================================
+    【Firebase 雲端設定區】
+    請將您從 Firebase 複製的設定貼在下方 const userCustomFirebaseConfig = { ... } 裡面：
+    =============================================================================
+    -->
+    <script>
+        window.userCustomFirebaseConfig = {
+            /* 請將註解移除，並貼上您的 Firebase 資訊：
+            apiKey: "您的真實 apiKey",
+            authDomain: "您的專案.firebaseapp.com",
+            projectId: "您的專案 ID",
+            storageBucket: "您的專案.appspot.com",
+            messagingSenderId: "您的 Sender ID",
+            appId: "您的 App ID"
+            */
+        };
+    </script>
 
     <!-- 頂部標題區 -->
     <header class="bg-amber-700 text-white py-6 px-4 shadow-md sticky top-0 z-10">
@@ -52,6 +67,15 @@
     </header>
 
     <main class="max-w-4xl mx-auto px-4 mt-8">
+
+        <!-- 同步狀態提示欄 -->
+        <div id="syncStatus" class="mb-4 p-3 rounded-xl bg-amber-100 text-amber-900 text-elderly-base flex items-center justify-between border border-amber-300">
+            <span class="flex items-center gap-2">
+                <i id="syncIcon" class="fa-solid fa-cloud text-amber-600"></i>
+                <span id="syncText">已啟用即時自動儲存 (離線/線上皆可運作)</span>
+            </span>
+            <span class="text-sm bg-amber-200 px-3 py-1 rounded-full text-amber-800 font-bold">家人連線同步中</span>
+        </div>
 
         <!-- 編輯模式提醒 Banner -->
         <div id="editBanner" class="hidden mb-6 p-4 bg-amber-100 border-l-8 border-amber-600 rounded-r-xl text-amber-900 text-elderly-base flex justify-between items-center">
@@ -102,8 +126,8 @@
     <!-- 自訂輸入彈窗 (取代 prompt) -->
     <div id="promptModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm hidden flex items-center justify-center z-50 p-4">
         <div class="bg-white rounded-3xl p-8 max-w-lg w-full shadow-2xl border-4 border-amber-500">
-            <h3 id="promptTitle" class="text-elderly-lg font-bold text-gray-800 mb-4">請輸入問題內容</h3>
-            <input type="text" id="promptInput" class="w-full p-4 border-2 border-amber-300 rounded-xl text-elderly-base mb-6 focus:ring-4 focus:ring-amber-200 outline-none" placeholder="請在此輸入問題標題...">
+            <h3 id="promptTitle" class="text-elderly-lg font-bold text-gray-800 mb-4">請輸入內容</h3>
+            <input type="text" id="promptInput" class="w-full p-4 border-2 border-amber-300 rounded-xl text-elderly-base mb-6 focus:ring-4 focus:ring-amber-200 outline-none" placeholder="請在此輸入...">
             <div class="flex gap-4">
                 <button onclick="closePromptModal()" class="flex-1 bg-gray-200 text-gray-800 font-bold py-3 rounded-xl text-elderly-base hover:bg-gray-300">取消</button>
                 <button id="promptConfirmBtn" class="flex-1 bg-amber-600 text-white font-bold py-3 rounded-xl text-elderly-base hover:bg-amber-700">確定</button>
@@ -114,12 +138,17 @@
     <!-- Firebase SDK 引入與邏輯處理 -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // Firebase 初始化與全域變數配置
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'treatment-questionnaire-app';
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+        // 讀取頂部設定的 Firebase Config
+        const userCustomFirebaseConfig = window.userCustomFirebaseConfig || {};
+
+        const firebaseConfig = (Object.keys(userCustomFirebaseConfig).length > 0) 
+            ? userCustomFirebaseConfig 
+            : (typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null);
+
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'medical-questionnaire-app';
 
         let db = null;
         let auth = null;
@@ -127,128 +156,54 @@
 
         // 預設完整的題目資料庫
         const defaultQuestions = [
-            {
-                id: 'q1',
-                type: 'yes_no',
-                title: '1. 禮拜五去做檢查，順便問禮拜一是否能看到報告？',
-                answer: null, // 'yes' 或 'no'
-                notes: []
-            },
-            {
-                id: 'q2_1',
-                type: 'text',
-                title: '2-1. 電療什麼時候開始做？',
-                answer: '',
-                notes: []
-            },
-            {
-                id: 'q2_2',
-                type: 'text',
-                title: '2-2. 電療幾天做一次？',
-                answer: '',
-                notes: []
-            },
-            {
-                id: 'q2_3',
-                type: 'text',
-                title: '2-3. 電療一次做多久？',
-                answer: '',
-                notes: []
-            },
-            {
-                id: 'q2_4',
-                type: 'text',
-                title: '2-4. 電療後有什麼副作用？',
-                answer: '',
-                notes: []
-            },
-            {
-                id: 'q2_5',
-                type: 'text',
-                title: '2-5. 回家要注意什麼？',
-                answer: '',
-                notes: []
-            },
-            {
-                id: 'q3_1',
-                type: 'text',
-                title: '3-1. 化療什麼時候開始做？',
-                answer: '',
-                notes: []
-            },
-            {
-                id: 'q3_2',
-                type: 'text',
-                title: '3-2. 化療多久做一次？',
-                answer: '',
-                notes: []
-            },
-            {
-                id: 'q3_3',
-                type: 'text',
-                title: '3-3. 化療一次做多久？',
-                answer: '',
-                notes: []
-            },
-            {
-                id: 'q3_4',
-                type: 'text',
-                title: '3-4. 化療後的副作用？',
-                answer: '',
-                notes: []
-            },
-            {
-                id: 'q3_5',
-                type: 'text',
-                title: '3-5. 回家要注意什麼？',
-                answer: '',
-                notes: []
-            }
+            { id: 'q1', type: 'yes_no', title: '1. 禮拜五去做檢查，順便問禮拜一是否能看到報告？', answer: null, notes: [] },
+            { id: 'q2_1', type: 'text', title: '2-1. 電療什麼時候開始做？', answer: '', notes: [] },
+            { id: 'q2_2', type: 'text', title: '2-2. 電療幾天做一次？', answer: '', notes: [] },
+            { id: 'q2_3', type: 'text', title: '2-3. 電療一次做多久？', answer: '', notes: [] },
+            { id: 'q2_4', type: 'text', title: '2-4. 電療後有什麼副作用？', answer: '', notes: [] },
+            { id: 'q2_5', type: 'text', title: '2-5. 回家要注意什麼？', answer: '', notes: [] },
+            { id: 'q3_1', type: 'text', title: '3-1. 化療什麼時候開始做？', answer: '', notes: [] },
+            { id: 'q3_2', type: 'text', title: '3-2. 化療多久做一次？', answer: '', notes: [] },
+            { id: 'q3_3', type: 'text', title: '3-3. 化療一次做多久？', answer: '', notes: [] },
+            { id: 'q3_4', type: 'text', title: '3-4. 化療後的副作用？', answer: '', notes: [] },
+            { id: 'q3_5', type: 'text', title: '3-5. 回家要注意什麼？', answer: '', notes: [] }
         ];
 
-        // 狀態變數
         window.questions = [];
         window.isEditMode = false;
-        window.promptCallback = null;
 
-        // 初始化 Firebase 與 數據監聽
         async function initApp() {
-            if (firebaseConfig) {
+            if (firebaseConfig && firebaseConfig.apiKey) {
                 try {
                     const app = initializeApp(firebaseConfig);
                     auth = getAuth(app);
                     db = getFirestore(app);
 
-                    // 身份驗證
-                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                        await signInWithCustomToken(auth, __initial_auth_token);
-                    } else {
-                        await signInAnonymously(auth);
-                    }
+                    await signInAnonymously(auth);
 
-                    // 訂閱共享公開數據 (嚴格遵循雲端儲存路徑規範)
-                    docRef = doc(db, 'artifacts', appId, 'public', 'data', 'questionnaire_state', 'main');
+                    // 訂閱跨裝置同步資料
+                    docRef = doc(db, 'artifacts', appId, 'public', 'data', 'questionnaire_data', 'main');
                     onSnapshot(docRef, (docSnap) => {
                         if (docSnap.exists()) {
                             const data = docSnap.data();
                             if (data && Array.isArray(data.questions)) {
                                 window.questions = data.questions;
                                 renderQuestionnaire();
+                                updateSyncStatus(true, "雲端已實時連線同步");
                             }
                         } else {
-                            // 初始寫入預設資料
                             saveData(defaultQuestions);
                         }
                     }, (error) => {
-                        console.warn("Firestore Read Error, falling back to local memory:", error);
+                        console.warn("Firebase Read Error:", error);
                         loadFallbackData();
                     });
-
                 } catch (e) {
-                    console.error("Firebase init failed:", e);
+                    console.error("Firebase Auth/Init Failed:", e);
                     loadFallbackData();
                 }
             } else {
+                updateSyncStatus(false, "尚未填寫 Firebase Config (目前為本機儲存模式)");
                 loadFallbackData();
             }
         }
@@ -256,63 +211,63 @@
         function loadFallbackData() {
             const saved = localStorage.getItem('senior_treatment_questionnaire');
             if (saved) {
-                try {
-                    window.questions = JSON.parse(saved);
-                } catch(e) {
-                    window.questions = JSON.parse(JSON.stringify(defaultQuestions));
-                }
+                try { window.questions = JSON.parse(saved); } 
+                catch(e) { window.questions = JSON.parse(JSON.stringify(defaultQuestions)); }
             } else {
                 window.questions = JSON.parse(JSON.stringify(defaultQuestions));
             }
             renderQuestionnaire();
         }
 
-        // 保存數據至雲端/本地
-        window.saveData = async function(updatedQuestions) {
-            if (updatedQuestions) {
-                window.questions = updatedQuestions;
+        function updateSyncStatus(isOnline, text) {
+            const syncIcon = document.getElementById('syncIcon');
+            const syncText = document.getElementById('syncText');
+            if (syncText) syncText.innerText = text;
+            if (syncIcon) {
+                syncIcon.className = isOnline 
+                    ? "fa-solid fa-cloud-arrow-up text-emerald-600 animate-pulse" 
+                    : "fa-solid fa-hard-drive text-amber-600";
             }
-            if (db && docRef && auth.currentUser) {
+        }
+
+        window.saveData = async function(updatedQuestions) {
+            if (updatedQuestions) window.questions = updatedQuestions;
+            
+            // 寫入本機備份
+            localStorage.setItem('senior_treatment_questionnaire', JSON.stringify(window.questions));
+
+            // 寫入雲端同步
+            if (db && docRef) {
                 try {
                     await setDoc(docRef, { questions: window.questions }, { merge: true });
                 } catch (err) {
-                    console.error("Save to Firestore error:", err);
+                    console.error("Firestore Save Error:", err);
                 }
             }
-            localStorage.setItem('senior_treatment_questionnaire', JSON.stringify(window.questions));
             renderQuestionnaire();
         };
 
-        // 渲染畫面
         window.renderQuestionnaire = function() {
             const container = document.getElementById('questionnaireContainer');
             if (!container) return;
             container.innerHTML = '';
 
-            window.questions.forEach((q, index) => {
+            window.questions.forEach((q) => {
                 const card = document.createElement('div');
                 card.className = 'bg-white rounded-3xl p-6 sm:p-8 custom-shadow border-2 border-amber-200 transition-all';
 
-                // 標題區域
                 let headerHtml = `
                     <div class="flex items-start justify-between gap-4 mb-4">
-                        <h2 class="text-elderly-lg font-bold text-amber-900 flex-1">
-                            ${q.title}
-                        </h2>
+                        <h2 class="text-elderly-lg font-bold text-amber-900 flex-1">${q.title}</h2>
                         ${window.isEditMode ? `
                             <div class="flex items-center gap-2 shrink-0">
-                                <button onclick="editQuestionTitle('${q.id}')" class="text-amber-700 hover:text-amber-900 p-2 text-elderly-base" title="修改題目">
-                                    <i class="fa-solid fa-pen"></i>
-                                </button>
-                                <button onclick="deleteQuestion('${q.id}')" class="text-rose-600 hover:text-rose-800 p-2 text-elderly-base" title="刪除題目">
-                                    <i class="fa-solid fa-trash"></i>
-                                </button>
+                                <button onclick="editQuestionTitle('${q.id}')" class="text-amber-700 hover:text-amber-900 p-2 text-elderly-base"><i class="fa-solid fa-pen"></i></button>
+                                <button onclick="deleteQuestion('${q.id}')" class="text-rose-600 hover:text-rose-800 p-2 text-elderly-base"><i class="fa-solid fa-trash"></i></button>
                             </div>
                         ` : ''}
                     </div>
                 `;
 
-                // 核心回答區塊
                 let answerHtml = '';
                 if (q.type === 'yes_no') {
                     answerHtml = `
@@ -338,7 +293,6 @@
                     `;
                 }
 
-                // 歷史註記與修訂歷史 (讓家人隨時補充)
                 let notesListHtml = '';
                 if (q.notes && q.notes.length > 0) {
                     notesListHtml = q.notes.map((note, nIndex) => `
@@ -374,129 +328,23 @@
             });
         };
 
-        // 互動處理函式
-        window.setYesNoAnswer = function(id, val) {
-            const q = window.questions.find(item => item.id === id);
-            if (q) {
-                q.answer = val;
-                window.saveData();
-            }
-        };
+        // 事件與彈窗控制邏輯...
+        window.setYesNoAnswer = (id, val) => { const q = window.questions.find(i => i.id === id); if(q){ q.answer = val; window.saveData(); }};
+        window.updateTextAnswer = (id, text) => { const q = window.questions.find(i => i.id === id); if(q){ q.answer = text; window.saveData(); }};
+        window.addNotePrompt = (id) => { openPromptModal("新增補充註記", "例如：長兄於 10/28 補充說明...", (text) => { if(text && text.trim()){ const q = window.questions.find(i => i.id === id); if(q){ if(!q.notes) q.notes = []; q.notes.push(text.trim()); window.saveData(); }}});};
+        window.deleteNote = (id, idx) => { const q = window.questions.find(i => i.id === id); if(q && q.notes){ q.notes.splice(idx, 1); window.saveData(); }};
+        window.toggleEditMode = () => { window.isEditMode = !window.isEditMode; document.getElementById('editBanner').classList.toggle('hidden', !window.isEditMode); document.getElementById('addQuestionBox').classList.toggle('hidden', !window.isEditMode); document.getElementById('editModeBtnText').innerText = window.isEditMode ? '關閉編輯模式' : '開啟「編輯/新增題目」模式'; renderQuestionnaire(); };
+        window.editQuestionTitle = (id) => { const q = window.questions.find(i => i.id === id); if(!q) return; openPromptModal("修改問題內容", "", (text) => { if(text && text.trim()){ q.title = text.trim(); window.saveData(); }}, q.title); };
+        window.deleteQuestion = (id) => { window.questions = window.questions.filter(q => q.id !== id); window.saveData(); };
+        window.addNewQuestionPrompt = () => { openPromptModal("新增問卷題目", "例如：4-1. 療程期間飲食有什麼限制？", (text) => { if(text && text.trim()){ window.questions.push({ id: 'q_' + Date.now(), type: 'text', title: text.trim(), answer: '', notes: [] }); window.saveData(); }}); };
+        window.resetToDefaultPrompt = () => { openPromptModal("恢復預設問題", "請輸入「重置」以確認。", (text) => { if(text === '重置'){ window.questions = JSON.parse(JSON.stringify(defaultQuestions)); window.saveData(); showModal("提示", "已成功恢復預設問卷。"); }}); };
 
-        window.updateTextAnswer = function(id, text) {
-            const q = window.questions.find(item => item.id === id);
-            if (q) {
-                q.answer = text;
-                window.saveData();
-            }
-        };
+        window.showModal = (title, msg) => { document.getElementById('modalTitle').innerText = title; document.getElementById('modalMessage').innerText = msg; document.getElementById('messageModal').classList.remove('hidden'); };
+        window.closeModal = () => { document.getElementById('messageModal').classList.add('hidden'); };
+        window.openPromptModal = (title, placeholder, callback, defaultValue = '') => { document.getElementById('promptTitle').innerText = title; const input = document.getElementById('promptInput'); input.placeholder = placeholder; input.value = defaultValue; window.promptCallback = callback; document.getElementById('promptModal').classList.remove('hidden'); input.focus(); };
+        window.closePromptModal = () => { document.getElementById('promptModal').classList.add('hidden'); window.promptCallback = null; };
+        document.getElementById('promptConfirmBtn').addEventListener('click', () => { if (window.promptCallback) window.promptCallback(document.getElementById('promptInput').value); closePromptModal(); });
 
-        window.addNotePrompt = function(id) {
-            openPromptModal("新增補充註記", "例如：長兄於 10/28 補充說明...", (text) => {
-                if (text && text.trim()) {
-                    const q = window.questions.find(item => item.id === id);
-                    if (q) {
-                        if (!q.notes) q.notes = [];
-                        q.notes.push(text.trim());
-                        window.saveData();
-                    }
-                }
-            });
-        };
-
-        window.deleteNote = function(id, noteIndex) {
-            const q = window.questions.find(item => item.id === id);
-            if (q && q.notes) {
-                q.notes.splice(noteIndex, 1);
-                window.saveData();
-            }
-        };
-
-        window.toggleEditMode = function() {
-            window.isEditMode = !window.isEditMode;
-            document.getElementById('editBanner').classList.toggle('hidden', !window.isEditMode);
-            document.getElementById('addQuestionBox').classList.toggle('hidden', !window.isEditMode);
-            document.getElementById('editModeBtnText').innerText = window.isEditMode ? '關閉編輯模式' : '開啟「編輯/新增題目」模式';
-            renderQuestionnaire();
-        };
-
-        window.editQuestionTitle = function(id) {
-            const q = window.questions.find(item => item.id === id);
-            if (!q) return;
-            openPromptModal("修改問題內容", "", (text) => {
-                if (text && text.trim()) {
-                    q.title = text.trim();
-                    window.saveData();
-                }
-            }, q.title);
-        };
-
-        window.deleteQuestion = function(id) {
-            window.questions = window.questions.filter(q => q.id !== id);
-            window.saveData();
-        };
-
-        window.addNewQuestionPrompt = function() {
-            openPromptModal("新增問卷題目", "例如：4-1. 療程期間飲食有什麼限制？", (text) => {
-                if (text && text.trim()) {
-                    const newId = 'q_' + Date.now();
-                    window.questions.push({
-                        id: newId,
-                        type: 'text',
-                        title: text.trim(),
-                        answer: '',
-                        notes: []
-                    });
-                    window.saveData();
-                }
-            });
-        };
-
-        window.resetToDefaultPrompt = function() {
-            openPromptModal("恢復預設問題", "您確定要重置所有問題嗎？請輸入「重置」以確認。", (text) => {
-                if (text === '重置') {
-                    window.questions = JSON.parse(JSON.stringify(defaultQuestions));
-                    window.saveData();
-                    showModal("提示", "已成功恢復初始預設問卷。");
-                }
-            });
-        };
-
-        // Modal 彈窗控制
-        window.showModal = function(title, msg) {
-            document.getElementById('modalTitle').innerText = title;
-            document.getElementById('modalMessage').innerText = msg;
-            document.getElementById('messageModal').classList.remove('hidden');
-        };
-
-        window.closeModal = function() {
-            document.getElementById('messageModal').classList.add('hidden');
-        };
-
-        window.openPromptModal = function(title, placeholder, callback, defaultValue = '') {
-            document.getElementById('promptTitle').innerText = title;
-            const input = document.getElementById('promptInput');
-            input.placeholder = placeholder;
-            input.value = defaultValue;
-            window.promptCallback = callback;
-            document.getElementById('promptModal').classList.remove('hidden');
-            input.focus();
-        };
-
-        window.closePromptModal = function() {
-            document.getElementById('promptModal').classList.add('hidden');
-            window.promptCallback = null;
-        };
-
-        document.getElementById('promptConfirmBtn').addEventListener('click', () => {
-            const inputVal = document.getElementById('promptInput').value;
-            if (window.promptCallback) {
-                window.promptCallback(inputVal);
-            }
-            closePromptModal();
-        });
-
-        // 啟動 App
         initApp();
     </script>
 </body>
